@@ -20,7 +20,7 @@ LINKS = {
     "project": "project", "superseded_by": "action",
 }
 TERMINAL = {"completed", "cancelled", "superseded"}
-RESERVED = {"id", "kind", "at", "source_updated_at", "evidence", "disagreements"}
+RESERVED = {"id", "kind", "at", "source_updated_at", "evidence", "disagreements", "certainty"}
 DEFAULT_STORE = Path(".local/ontology.jsonl")
 
 
@@ -61,7 +61,7 @@ def validate(row):
         raise ValueError("record must be an object")
     op, kind, actor = (row.get(key) for key in ("op", "kind", "actor"))
     at, fields, evidence = (row.get(key) for key in ("at", "fields", "evidence"))
-    if (op not in ("create", "update", "redirect", "merge", "review") or kind not in KINDS
+    if (op not in ("create", "update", "redirect", "merge", "review", "split") or kind not in KINDS
             or not isinstance(actor, str) or actor not in AUTHORITY or not name(row.get("id"))
             or type(at) not in (int, float) or not math.isfinite(at)
             or not isinstance(fields, dict) or RESERVED & fields.keys()):
@@ -94,6 +94,10 @@ def validate(row):
             (fields and not rename) or (not name(target) and not (op == "merge" and actor == "owner" and target is None))
             or target == row["id"]):
         raise ValueError("invalid redirect or merge")
+    if op == "split" and (actor != "owner" or fields or not name(target)
+                          or target == row["id"] or not isinstance(row.get("refs"), list)
+                          or not row["refs"] or not all(map(name, row["refs"]))):
+        raise ValueError("split needs an owner, distinct target and evidence references")
     if op == "review" and (not isinstance(target, list) or not all(map(name, target))
                            or not name(row.get("reason"))):
         raise ValueError("invalid unresolved review")
@@ -118,10 +122,30 @@ def distinct_evidence(values):
     return list({encode(value): value for value in values}.values())
 
 
+def certainty(name_actor, evidence):
+    """Owner identity, one verbatim source identity, or two independent origins."""
+    quoted = {re.sub(r"#L\d+(?:-L\d+)?$", "", ref["ref"]) for ref in evidence if ref["quote"]}
+    if name_actor == "owner" or (name_actor == "source" and quoted) or len(quoted) >= 2:
+        return "certain"
+    return "uncertain"
+
+
+def _placeholder(key, value):
+    return key in LINKS and value in (UNASSIGNED, [UNASSIGNED])
+
+
+def _field_rank(actor, key, value):
+    # A migration placeholder provides no source-backed attribution.
+    return -1 if actor == "source" and _placeholder(key, value) else AUTHORITY[actor]
+
+
 def _pick(item, winners, row, key, value):
     actor = row["actor"]
     prior = winners.get(key)
-    if prior is not None and AUTHORITY[actor] < AUTHORITY[prior]:
+    rank = _field_rank(actor, key, value)
+    if prior is not None and rank < _field_rank(prior, key, item[key]):
+        if actor != "owner" and _placeholder(key, value):
+            return
         disputes = item.setdefault("disagreements", {})
         if item[key] != value:
             disputes[key] = {"value": value, "actor": actor, "evidence": row["evidence"]}
@@ -132,16 +156,26 @@ def _pick(item, winners, row, key, value):
         value = unique([*item.get(key, []), *value])
     item[key], winners[key] = value, actor
     item.get("disagreements", {}).pop(key, None)
+    return True
 
 
 def _relations(rows, kinds):
-    legacy, choices, disputes = {}, {}, {}
+    aliases, choices, disputes = {}, {}, {}
     for row in rows:
         identity, op, target = row["id"], row["op"], row.get("target")
         if op == "redirect":
-            if identity in legacy and legacy[identity] != target:
-                raise ValueError("conflicting redirects")
-            legacy[identity] = target
+            prior = aliases.get(identity)
+            if prior and prior["target"] != target:
+                # An explicit owner decision can repoint an old alias after a split.
+                if identity in kinds or row["fields"] or prior["fields"]:
+                    raise ValueError("conflicting redirects")
+                if row["actor"] != "owner":
+                    if prior["actor"] == "owner":
+                        continue
+                    raise ValueError("conflicting redirects")
+            if not prior or AUTHORITY[row["actor"]] >= AUTHORITY[prior["actor"]]:
+                aliases[identity] = row
+    legacy = {key: row["target"] for key, row in aliases.items()}
     legacy_ids = {key: value for key, value in legacy.items() if key not in kinds}
     for row in rows:
         if row["op"] != "merge":
@@ -192,6 +226,7 @@ def replay(records, *, with_field_records=False):
     redirects, disputes = _relations(rows, kinds)
     items, winners, names, reviews, seen_reviews = {}, defaultdict(dict), defaultdict(list), {}, {}
     field_records = defaultdict(dict)
+    confirmations, splits = set(), []
     for identity, kind in kinds.items():
         if identity not in redirects:
             items[identity] = {"id": identity, "kind": kind, "at": 0, "evidence": []}
@@ -201,19 +236,27 @@ def replay(records, *, with_field_records=False):
         identity = resolve(row["id"], redirects)
         if row["op"] == "review":
             review = {**row, "target": unique(resolve(target, redirects) for target in row["target"])}
+            prior = reviews.get(row["id"])
+            if prior and AUTHORITY[prior["actor"]] > AUTHORITY[row["actor"]]:
+                continue
             reviews[row["id"]] = review
+            if row["actor"] == "owner" and row["reason"] == "confirmed-identity":
+                confirmations.update(review["target"])
+            continue
+        if row["op"] == "split":
+            splits.append(row)
             continue
         item = items[identity]
         item["evidence"].extend(row["evidence"])
         if row["op"] in ("merge", "redirect"):
             if row["op"] == "redirect" and row.get("target") == identity and row["fields"]:
-                _pick(item, winners[identity], row, "name", row["fields"]["name"])
-                if with_field_records and winners[identity]["name"] == row["actor"]:
+                picked = _pick(item, winners[identity], row, "name", row["fields"]["name"])
+                if with_field_records and picked:
                     field_records[identity]["name"] = row
             continue
         for key, value in row["fields"].items():
-            _pick(item, winners[identity], row, key, value)
-            if with_field_records and winners[identity][key] == row["actor"]:
+            picked = _pick(item, winners[identity], row, key, value)
+            if with_field_records and picked:
                 field_records[identity][key] = row
         if row["op"] == "create" and (item["kind"] == "subject" or row["id"] != identity):
             names[identity].append(row["fields"]["name"])
@@ -224,6 +267,18 @@ def replay(records, *, with_field_records=False):
                 for ref in row["evidence"]))
         else:
             item["at"] = max(item["at"], row["at"])
+    for row in splits:
+        origin = resolve(row["id"], redirects)
+        target = resolve(row["target"], redirects)
+        # A later merge may intentionally bring the partition back together.
+        if origin == target:
+            continue
+        if target not in items or items[target]["kind"] != row["kind"]:
+            raise ValueError("missing split target or different kind")
+        original = items[origin]["evidence"]
+        moved = [ref for ref in original if ref["ref"] in row["refs"]]
+        items[target]["evidence"].extend(moved)
+        items[origin]["evidence"] = [ref for ref in original if ref["ref"] not in row["refs"]] + row["evidence"]
     for old, row in disputes.items():
         item = items[resolve(old, redirects)]
         item.setdefault("disagreements", {}).setdefault("merge", {})[old] = {
@@ -234,9 +289,13 @@ def replay(records, *, with_field_records=False):
             item["aliases"] = [label for label in unique([*item.get("aliases", []), *names[identity]])
                                if label != item["name"]]
         item["evidence"] = distinct_evidence(item["evidence"])
+        actor = "owner" if identity in confirmations else winners[identity].get("name")
+        item["certainty"] = certainty(actor, item["evidence"])
         if not item.get("disagreements"):
             item.pop("disagreements", None)
     for key, review in list(reviews.items()):
+        if review["actor"] == "owner" and review["reason"] in ("confirmed-identity", "dismissed-review"):
+            continue
         if review["reason"] != "ambiguous-identity":
             continue
         targets = tuple(sorted(review["target"]))
@@ -280,7 +339,7 @@ def load(path=DEFAULT_STORE, *, with_field_records=False):
         return replay([], with_field_records=with_field_records)
 
 
-def append(make_records, path=DEFAULT_STORE, *, with_field_records=False):
+def append(make_records, path=DEFAULT_STORE, *, with_field_records=False, batch=None):
     """Build and validate an append against the locked current journal."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -288,8 +347,12 @@ def append(make_records, path=DEFAULT_STORE, *, with_field_records=False):
         fcntl.flock(stream, fcntl.LOCK_EX)
         stream.seek(0)
         previous = list(_read(stream))
+        if batch is not None and any(row.get("scan_batch") == batch for row in previous):
+            return []
         new = list(make_records(replay(previous, with_field_records=with_field_records)))
         if new:
+            if batch is not None:
+                new[0] = {**new[0], "scan_batch": batch}
             replay([*previous, *new])
             payload = encode(new[0] if len(new) == 1 else {"records": new})
             stream.seek(0, os.SEEK_END)

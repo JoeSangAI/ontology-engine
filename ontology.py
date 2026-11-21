@@ -170,7 +170,7 @@ def _relations(rows, kinds):
     return redirects, disputes
 
 
-def replay(records):
+def replay(records, *, with_field_records=False):
     rows = list(records)
     for row in rows:
         validate(row)
@@ -191,6 +191,7 @@ def replay(records):
         kinds[target] = row["kind"]
     redirects, disputes = _relations(rows, kinds)
     items, winners, names, reviews, seen_reviews = {}, defaultdict(dict), defaultdict(list), {}, {}
+    field_records = defaultdict(dict)
     for identity, kind in kinds.items():
         if identity not in redirects:
             items[identity] = {"id": identity, "kind": kind, "at": 0, "evidence": []}
@@ -207,9 +208,13 @@ def replay(records):
         if row["op"] in ("merge", "redirect"):
             if row["op"] == "redirect" and row.get("target") == identity and row["fields"]:
                 _pick(item, winners[identity], row, "name", row["fields"]["name"])
+                if with_field_records and winners[identity]["name"] == row["actor"]:
+                    field_records[identity]["name"] = row
             continue
         for key, value in row["fields"].items():
             _pick(item, winners[identity], row, key, value)
+            if with_field_records and winners[identity][key] == row["actor"]:
+                field_records[identity][key] = row
         if row["op"] == "create" and (item["kind"] == "subject" or row["id"] != identity):
             names[identity].append(row["fields"]["name"])
         if item["kind"] == "subject":
@@ -244,7 +249,10 @@ def replay(records):
             del reviews[key]
         else:
             seen_reviews[targets] = key
-    return {"items": items, "redirects": redirects, "reviews": list(reviews.values())}
+    state = {"items": items, "redirects": redirects, "reviews": list(reviews.values())}
+    if with_field_records:
+        state["field_records"] = field_records
+    return state
 
 
 def _read(stream):
@@ -263,16 +271,16 @@ def _read(stream):
             raise ValueError(f"invalid journal line {line_number}: {exc}") from exc
 
 
-def load(path=DEFAULT_STORE):
+def load(path=DEFAULT_STORE, *, with_field_records=False):
     try:
         with Path(path).open("rb") as stream:
             fcntl.flock(stream, fcntl.LOCK_SH)
-            return replay(_read(stream))
+            return replay(_read(stream), with_field_records=with_field_records)
     except FileNotFoundError:
-        return replay([])
+        return replay([], with_field_records=with_field_records)
 
 
-def append(make_records, path=DEFAULT_STORE):
+def append(make_records, path=DEFAULT_STORE, *, with_field_records=False):
     """Build and validate an append against the locked current journal."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -280,7 +288,7 @@ def append(make_records, path=DEFAULT_STORE):
         fcntl.flock(stream, fcntl.LOCK_EX)
         stream.seek(0)
         previous = list(_read(stream))
-        new = list(make_records(replay(previous)))
+        new = list(make_records(replay(previous, with_field_records=with_field_records)))
         if new:
             replay([*previous, *new])
             payload = encode(new[0] if len(new) == 1 else {"records": new})

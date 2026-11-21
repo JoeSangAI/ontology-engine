@@ -50,3 +50,13 @@ python3.12 -m unittest -v
 ```
 
 迁移器读取旧工作台格式的事件种子和行动快照。可加 `--ledger LEDGER.json` 补读快照引用的待办原记录，或加 `--read-evidence` 回取哈希吻合的来源行。输出路径须为新文件。运行数据建议放在已被 Git 忽略的 `.local/`。单元测试通过注入桩验证模型抽取。
+
+## 补归属
+
+```sh
+python3.12 -m backfill --store .local/imported.jsonl --review .local/待确认.md
+```
+
+默认预览，指定 `--apply` 后将唯一匹配追加为 `source` 记录。脚本用待办引用的路径匹配项目的 `home`，用人员的机构文字匹配机构的名字或别名，并用项目 `home` 的直接上级目录名匹配客户。现有归属和主人填写的字段优先保留，待确认清单须输出到新文件。
+
+迁移后的日志可通过 `--ledger LEDGER.json` 补读其引用的台账字段。`--context` 接受私有 JSON。可提供 `organizations`（`name`、`path`，文本出处另填 `line`，可选 `quote`、`aliases`、`existing`）、`background_paths`（只供核对的台账引用路径）和 `directory_notes`（按导航目录绝对路径给出核对说明）。

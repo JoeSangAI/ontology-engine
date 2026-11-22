@@ -97,6 +97,18 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(query(state, identity="客户机构", kind="project")["related"][0]["id"], "交付项目")
         self.assertEqual(query(state, question="稿件怎么整理", kind="action")["matches"][0]["id"], "整理稿件")
 
+    def test_parent_project_brings_its_children_and_their_actions(self):
+        state = replay([
+            event("大项目", fields={"name": "大项目"}),
+            event("小项目", fields={"name": "小项目", "parent": "大项目"}),
+            event("例会", fields={"name": "例会", "parent": "大项目"}),
+            event("准备方案", kind="action", fields={"name": "准备方案", "project": "小项目", "people": ["未归属"]}),
+        ])
+        self.assertEqual([row["id"] for row in query(state, identity="大项目", kind="project")["related"]],
+                         ["例会", "小项目"])
+        self.assertEqual([row["id"] for row in query(state, identity="大项目", kind="action")["related"]], ["准备方案"])
+        self.assertEqual([row["id"] for row in query(state, identity="例会", kind="project")["related"]], ["大项目"])
+
     def test_org_correction_does_not_keep_old_migrated_relationship(self):
         rows = [
             event("原机构", kind="subject", fields={"name": "原机构", "type": "organization"}),

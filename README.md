@@ -1,76 +1,91 @@
-# Ontology Engine
+<h1 align="center">本体构建引擎 · Ontology Engine</h1>
 
-用一份本地 JSONL 日志记录主体（人或机构）、项目和行动。从日志回放现状，按名字或问题检索，并沿引用返回相关条目。需要 Python 3.12 和支持文件锁的系统（例如 macOS 或 Linux）。依赖均为标准库。
+<h3 align="center">让你所有的 AI 助手，对“谁是谁、事到哪了”有同一个答案。</h3>
 
-## 命令行
+<p align="center">从你自己的笔记、文件和会议转写里，整理出一份本地的人、机构、项目和待办索引。<br>听错的名字认得出，每条判断都指回原话，你说的永远优先。Claude Code、Codex 等助手共用同一份。</p>
 
-```sh
-python3.12 -m cli query --kind project
-python3.12 -m cli query --name '示例项目'
-python3.12 -m cli query --question '示例项目还有什么事' --kind action
-python3.12 -m cli correct '示例项目' --fields '{"status":"paused"}' --quote '示例项目暂停。'
-python3.12 -m cli correct '示例项目' --rename '交付项目' --quote '示例项目正式改名为交付项目。'
+<p align="center">
+  <a href="#快速开始"><strong>一分钟跑通示例 →</strong></a>　·　
+  <a href="skill/SKILL.md">给 AI 助手用的 Skill</a>　·　
+  <a href="docs/REFERENCE.md">命令与格式</a>
+</p>
+
+<p align="center"><sub>Python 3.12 · 只用标准库 · 数据只在你的电脑上 · 不需要 API 密钥 · MIT 开源</sub></p>
+
+## 每个 AI 助手都从头认识你一遍
+
+今天让一个助手跟进客户，明天换个助手写周报，它们都得重新翻一遍你的文件，才知道「林夏」是谁、「青禾」那个项目到哪了。会议转写把「青禾」听成「青河」，它就找不到了。你纠正过一次，换个助手又错一次。
+
+本体构建引擎把这些只做一次：认出同一个人或机构的所有叫法，记住每件事现在的状态，标明每条判断出自哪句原话。之后任何助手先查它，再回原文读细节。
+
+| | 每次让助手直接搜文件 | 本体构建引擎 |
+| --- | --- | --- |
+| 「青河」是不是「青禾」 | 认不出 | 错听挂在同一个条目下 |
+| 现在到哪一步 | 新旧说法混在一起 | 按「你 > 原件 > 模型」取当前值 |
+| 这话谁说的 | 要再找一遍 | 每条都带出处和逐字原话 |
+| 你纠正一次 | 换个助手就忘了 | 所有助手读同一份日志 |
+
+## 你说的话，永远压过模型的猜测
+
+每条记录都标明是谁说的：你本人（owner）、原始材料（source），还是模型推断（model）。同一字段以你为准，模型后来的不同意见不会覆盖你，只会列进「有分歧」等你看。纠正要带上你的原话，下次谁问都看得到依据。
+
+## 只追加，不改写，随时能回头
+
+所有变化都追加写进一份 JSONL 日志，当前状态靠回放得出。改名会留下「旧名 → 新名」，旧名照样能查到；拆开、合并都有记录，可以逐条撤回。日志是纯文本，你可以直接打开看。
+
+## 指回原处，不抄原文
+
+本体只存身份、状态和出处，不复制你的文件。每条判断都引用原件位置和一句逐字摘录，引擎写入前会核对这句话确实出自那个片段。要看细节，就回原件去读。
+
+## 它怎么工作
+
+```text
+你授权的文件夹 / 摘录清单
+  → scan：交出变化的片段和整理说明
+  → 你正在用的 AI 助手读片段，按说明写判断（必须逐字引用原话）
+  → apply：引擎核对出处后追加，回放出当前的人、机构、项目、待办
+  → query：任何助手按名字、错听或问题来查；你的纠正用 correct 记下
 ```
 
-默认日志为当前目录下的 `.local/ontology.jsonl`。可在子命令前用 `--store PATH` 指定路径。首次使用可以运行下方的文件夹抽取或迁移，先建立条目。查询输出 `matches`（直接命中）与 `related`（按字段算出的关系）。`--kind` 同时筛选这两组结果。问题文本以名字和别称匹配为主，辅以词片段匹配，返回可检查的条目。旧名和旧编号仍可查询。
+引擎本身不调用任何模型。判断由你正在用的助手来做，引擎只负责记录、核对和回放。
 
-## 写入与回放
+## 快速开始
 
-每条记录有 `op`、`id`、`kind`、`actor`、Unix 秒 `at`、`fields` 和一条或多条 `evidence`。证据包含引用 `ref` 和摘录 `quote`。缺少原话的旧证据用 `null` 标记。
+需要 Python 3.12。下面的示例用虚构的两份笔记，在临时目录里跑完整个流程，不碰你的任何文件：
 
-```json
-{"op":"create","id":"示例项目","kind":"project","actor":"source","at":1,"fields":{"name":"示例项目"},"evidence":[{"ref":"notes.md#L1","quote":"示例项目启动。"}]}
+```bash
+git clone https://github.com/JoeSangAI/ontology-engine.git
+cd ontology-engine
+bash examples/demo.sh
 ```
 
-- 每个字段以 `owner > source > model` 为准。同级取较晚的记录，同一时间按日志顺序。低优先级的后续异议可在 `disagreements` 查到。source 的「未归属」是缺值，允许有证据的模型归属补上。模型可重判自己的归属，owner 明确填写的「未归属」仍以 owner 为准。
-- 来源追加 `aliases` 和 `misrecognitions` 时合并列表。主人的纠正替换所写的整个列表，包括空列表。
-- 以名字分配标识，重名时加后缀，如 `示例项目 (2)`。创建同名对象时可用 `allocate` 生成标识。纠正可用带后缀的标识选中条目。
-- `redirect` 记录旧名或旧编号的去向。用 `correct --rename` 写入一条改名记录。迁移也保留合并记录和待核线索。
-- 在 `project`、`people`、`organization`、`client` 等字段写目标标识即可连接。每件新行动都需填写 `project` 和 `people`。未知时分别用 `"未归属"` 和 `["未归属"]`。
-- `append` 在锁内读取并校验新记录。单条直接写入 JSONL，多条批量写在同一行的 `records` 数组中。日志中的损坏行会报错，便于从备份核对。
+你会看到：
 
-## 接入文件夹
-
-```python
-from ingest import extract, folder_changes
-
-changed, fragments, next_signatures = folder_changes(folder, previous_signatures)
-records = extract(fragments, model)
+```text
+问「青河茶饮还有什么事」（转写听错的写法）：
+  命中: []  相关: ['出春季新品方案']
+问「林夏是哪家的」：
+   林夏 → 青禾茶饮
+主人说「方案提前到11月20日交。」：
+  截止: 11月20日 · 出处: 方案提前到11月20日交。
 ```
 
-`folder_changes` 返回变化的相对路径、UTF-8 文本片段和每份文件的内容签名。删除会列出路径。片段带原文件 URI 和行号。扫描跳过隐藏文件、隐藏目录、符号链接和二进制内容。调用者在成功处理后保存签名，下次扫描传回。
+**接到你自己的助手上：** 把 [skill/SKILL.md](skill/SKILL.md) 交给 Claude Code 或 Codex（放进它的 skills 目录，或直接让它读这份文件）。它会先问你授权哪些文件夹，再整理出第一版，挑出主要的人、机构和项目，每项附一句原话依据请你确认一轮。之后每次用之前先增量更新。
 
-`model(prompt, items, fragments)` 由调用者提供，返回按整理说明组织的记录列表。抽取会核对摘录是否逐字来自所引片段，再以 `model` 身份追加。同一次抽取的记录共同通过校验后入库。
+## 可信边界
 
-## 迁移与测试
+- **数据只在本机。** 日志和来源登记表都在你的用户目录里；引擎没有网络功能，也不上传任何东西。读取哪些材料，由你授权的文件夹和你选择接入的邮箱、日历决定。
+- **判断的好坏取决于助手。** 引擎会拒绝找不到原话的判断，但不能替助手判断得更准。拿不准的条目标为 `uncertain`，并进入待你确认的清单。
+- **它答的是索引能答的问题。** 谁是谁、属于哪个项目、现在什么状态、出自哪里。字段里没有的问题，助手要回原文去读。
+- **测试：** `python3.12 -m unittest` 运行全部用例。用真实资料做过的一次顺序实验里，分批接入和一次性接入 7 个来源，最终 522 个条目的身份、归属和待办状态完全一致。
 
-```sh
-python3.12 -m migrate SEED.jsonl SNAPSHOT.json .local/imported.jsonl
-python3.12 -m unittest -v
-```
+## 下一步
 
-迁移器读取旧工作台格式的事件种子和行动快照。可加 `--ledger LEDGER.json` 补读快照引用的待办原记录，或加 `--read-evidence` 回取哈希吻合的来源行。输出路径须为新文件。运行数据建议放在已被 Git 忽略的 `.local/`。单元测试通过注入桩验证模型抽取。
+[一分钟跑通示例](#快速开始)，再把 [Skill](skill/SKILL.md) 交给你的 AI 助手。问题和建议请提 [Issue](https://github.com/JoeSangAI/ontology-engine/issues)。
 
-## 补归属
+## 深入文档
 
-```sh
-python3.12 -m backfill --store .local/imported.jsonl --review .local/待确认.md
-```
+- [命令与格式](docs/REFERENCE.md)：命令行、记录格式、回放规则、来源登记与增量更新、迁移与补归属。
+- [给 AI 助手的 Skill](skill/SKILL.md)：首次接入、每次更新、记录用户回答的完整流程。
 
-默认预览，指定 `--apply` 后将唯一匹配追加为 `source` 记录。脚本用待办引用的路径匹配项目的 `home`，用人员的机构文字匹配机构的名字或别名，并用项目 `home` 的直接上级目录名匹配客户。现有归属和主人填写的字段优先保留，待确认清单须输出到新文件。
-
-迁移后的日志可通过 `--ledger LEDGER.json` 补读其引用的台账字段。`--context` 接受私有 JSON。可提供 `organizations`（`name`、`path`，文本出处另填 `line`，可选 `quote`、`aliases`、`existing`）、`background_paths`（只供核对的台账引用路径）和 `directory_notes`（按导航目录绝对路径给出核对说明）。
-
-## 登记来源与更新
-
-用 `python3.12 -m cli` 运行下列子命令。自定义 `--store` 和 `--registry` 放在子命令前。登记表默认位于 `$XDG_STATE_HOME/ontology-engine/sources.json`，未设置时使用 `~/.local/state/ontology-engine/sources.json`。每张表绑定一份日志；使用时为同一用户固定这两条路径。
-
-- `source-add ID PATH` 登记已授权文件夹。邮箱、日历等由调用方接入，使用 `source-add ID PATH --type fragments` 登记用户数据目录里的逐字摘录清单。清单是由 `ref` 和 `quote` 对象组成的 JSON 数组，每个 `ref` 在本来源内唯一且刷新时保持稳定。
-- `scan` 交出变化、片段、整理说明和提交用的 `token`。增量扫描只交出变化的片段；新增来源时 `recheck` 为 `true`，交出所有来源的片段供调用方重判当前条目。
-- `apply TOKEN PROPOSALS.json` 或 `apply TOKEN -` 接收按整理说明生成的 JSON 数组。模型输出强制按 `model` 入库。引擎复查引用及逐字摘录，日志写入成功后保存各来源的内容签名。空数组表示本轮处理完毕且没有追加判断。来源有改动时需要重新扫描。日志已写而游标保存失败时，同一批重试会沿用已追加的记录。
-- `review` 列出新识别的主体或项目、不确定项、分歧和拆合建议。用 `review-answer ID confirm --quote '用户原话'` 确认身份，`dismiss` 关闭该条问题，`merge --target ID` 合并同种条目。答案带用户原话，以 `owner` 追加。字段分歧可用 `correct` 纠正，或关闭待核问题。
-- `split ID --fields '{"name":"独立项目"}' --move-ref REF --quote '用户原话'` 保留原标识，并用现有 `create` 建立新条目。可重复指定 `--move-ref`，迁移所选引用下的证据。可用 `--keep-fields` 调整原条目字段，用 `--redirect-id` 把指定旧编号指向新条目。单个 `split` 操作记录证据去了哪里，回放时移动证据，整批原子追加。直接按原标识的关系继续指向原条目，需要改归属的用 `correct`。
-
-查询条目带 `certainty`。名称由 `owner` 给出或身份获 owner 确认，判 `certain`。名称由 `source` 给出且条目有逐字证据，或条目拥有至少两个不同原件的逐字证据，也判 `certain`。其余判 `uncertain`。同一文件的多个行号算一个原件，旧记录中缺少原话的引用不计数。这是条目级标记，字段分歧可从 `disagreements` 查看。
-
-Claude Code 和 Codex 共用的流程见 [skill/SKILL.md](skill/SKILL.md)。
+MIT License

@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from time import time
 
+import reminders
 import review
 import sources
 from ontology import DEFAULT_STORE, KINDS, allocate, append, find, load, name, query
@@ -69,18 +70,43 @@ def main(argv=None):
     split.add_argument("--move-ref", action="append", required=True)
     split.add_argument("--keep-fields", type=json.loads)
     split.add_argument("--redirect-id", action="append", default=[])
+    commands.add_parser("reminders")
+    entrust = commands.add_parser("entrust")
+    entrust.add_argument("text")
+    entrust.add_argument("--due")
+    entrust.add_argument("--person", action="append", default=[])
+    respond = commands.add_parser("respond")
+    respond.add_argument("identity")
+    respond.add_argument("response", choices=reminders.RESPONSES)
+    respond.add_argument("--until")
+    for command in (entrust, respond):
+        command.add_argument("--request-id")
+        command.add_argument("--ref")
+        command.add_argument("--quote")
     for command in (write, answer, split):
         command.add_argument("--ref", default="owner:cli")
         command.add_argument("--quote", required=True)
     args = parser.parse_args(argv)
     args.store = args.store.expanduser()
-    if hasattr(args, "quote"):
+    if args.command in ("entrust", "respond"):
+        request_id = args.request_id or f"cli-{time()}"
+    elif hasattr(args, "quote"):
         evidence = {"ref": args.ref, "quote": args.quote}
     try:
         if args.command == "query":
             output = query(load(args.store), identity=args.name, kind=args.kind, question=args.question)
         elif args.command == "correct":
             output = correct(args.store, args.identity, evidence, fields=args.fields, rename=args.rename)
+        elif args.command == "reminders":
+            output = reminders.outlet(load(args.store, with_field_records=True))
+        elif args.command == "entrust":
+            item, created = reminders.entrust(args.store, request_id, args.text, due=args.due,
+                                              people=args.person, ref=args.ref, quote=args.quote)
+            output = {"schema": reminders.SCHEMA_VERSION, "item": item, "created": created}
+        elif args.command == "respond":
+            output = {"schema": reminders.SCHEMA_VERSION, **reminders.respond(
+                args.store, request_id, args.identity, args.response, until=args.until,
+                ref=args.ref, quote=args.quote)}
         elif args.command == "source-add":
             output = sources.register(args.registry, args.store, args.identity, args.path, args.type)
         elif args.command == "scan":

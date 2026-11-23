@@ -75,3 +75,19 @@ python3.12 -m backfill --store .local/imported.jsonl --review .local/待确认.m
 查询条目带 `certainty`。名称由 `owner` 给出或身份获 owner 确认，判 `certain`。名称由 `source` 给出且条目有逐字证据，或条目拥有至少两个不同原件的逐字证据，也判 `certain`。其余判 `uncertain`。同一文件的多个行号算一个原件，旧记录中缺少原话的引用不计数。这是条目级标记，字段分歧可从 `disagreements` 查看。
 
 Claude Code 和 Codex 共用的流程见 [skill/SKILL.md](../skill/SKILL.md)。
+
+## 提醒：一个出口，一个入口
+
+给守在用户身边、负责挑时机的那一端用（桌面助手、手机等）。账仍然只有这一份日志：用户交代的一件事是一条行动，回应写回同一条。
+
+```sh
+python3.12 -m cli reminders
+python3.12 -m cli entrust '把样稿发给示例联系人' --due 2030-03-04T15:00:00+08:00 --person '示例联系人' --request-id r-1
+python3.12 -m cli respond '把样稿发给示例联系人' done --request-id a-1
+```
+
+- `reminders` 列出未结且有时机的行动。时机用通用说法：`time`（到点，`at` 为日期或带时区的时间，`due` 表示已到）、`person`（见到某人，带本体里这个人的全部名字）、`state`（`stalled`，停了多少天）。哪个窗口算「见到」由调用端判断。条目归属到项目时带 `project`（名字和别称），供调用端判断某个群是不是这个项目的群。
+- 一件事值不值得主动说出口由中枢判断：值得的条目带 `speak: true`。调用端只主动说带这个标记的，以及用户亲口交代的（`origin` 为 `entrusted`）；其余只在中枢自己的清单里。引擎本身不设这个标记，留给接入方的判断或学习结果。
+- `entrust` 当场记下一条新交代，可带时间和人。同一个 `--request-id` 重复提交仍是同一条，离线暂存后补交不会重复。
+- `respond` 记录用户的回应：`done`、`dropped`、`another_day`、`later`、`ignored`。前两种同时结束这条行动；`another_day` 可用 `--until` 指定回来的日子。每次回应连同提醒原因（`occasion`）和草稿差别（`draft`，由调用端填）追加在日志里，供以后学习。
+- Python 中对应 `reminders.outlet(state, now)`、`reminders.entrust(...)`、`reminders.respond(...)`。
